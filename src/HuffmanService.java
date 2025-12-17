@@ -18,10 +18,24 @@ final class HuffmanService {
              DataOutputStream headerOut = new DataOutputStream(fos)) {
 
             // Header must include the Huffman code info (we store frequencies -> reconstruct tree/codes). fileciteturn3file0L25-L27
+            // Optimized: only store non-zero frequencies to reduce header size
             headerOut.writeBytes(MAGIC);
             headerOut.writeLong(originalLen);
 
-            for (int i = 0; i < 256; i++) headerOut.writeInt(freq[i]);
+            // Count non-zero frequencies
+            int nonZeroCount = 0;
+            for (int i = 0; i < 256; i++) {
+                if (freq[i] > 0) nonZeroCount++;
+            }
+            headerOut.writeInt(nonZeroCount);
+
+            // Write only non-zero frequencies: byte value (1 byte) + frequency (4 bytes)
+            for (int i = 0; i < 256; i++) {
+                if (freq[i] > 0) {
+                    headerOut.writeByte(i);
+                    headerOut.writeInt(freq[i]);
+                }
+            }
 
             // Now write compressed bits
             try (BitOutputStream bitOut = new BitOutputStream(fos)) {
@@ -50,7 +64,19 @@ final class HuffmanService {
             if (!MAGIC.equals(magic)) throw new IOException("Not a Huffman file (bad magic): " + magic);
 
             originalLen = headerIn.readLong();
-            for (int i = 0; i < 256; i++) freq[i] = headerIn.readInt();
+            
+            // Read count of non-zero frequencies
+            int nonZeroCount = headerIn.readInt();
+            
+            // Initialize all frequencies to 0
+            for (int i = 0; i < 256; i++) freq[i] = 0;
+            
+            // Read only non-zero frequencies: byte value (1 byte) + frequency (4 bytes)
+            for (int i = 0; i < nonZeroCount; i++) {
+                int byteValue = headerIn.readByte() & 0xFF;
+                int frequency = headerIn.readInt();
+                freq[byteValue] = frequency;
+            }
 
             HuffmanNode root = HuffmanCodec.buildTree(freq);
             if (root == null) {
@@ -87,17 +113,53 @@ final class HuffmanService {
 
     static String buildHeaderDisplay(int[] freq, String[] codes, long originalLen) {
         StringBuilder sb = new StringBuilder();
-        sb.append("Header (HUF1)\n");
-        sb.append("Original Length (bytes): ").append(originalLen).append("\n");
-        sb.append("Non-zero frequencies + codes:\n");
-
+        sb.append("═══════════════════════════════════════════════════\n");
+        sb.append("HEADER STRUCTURE\n");
+        sb.append("═══════════════════════════════════════════════════\n\n");
+        
+        int nonZeroCount = 0;
+        for (int i = 0; i < 256; i++) {
+            if (freq[i] > 0) nonZeroCount++;
+        }
+        int headerSize = calculateHeaderSize(freq);
+        
+        sb.append("Header Format (Total: ").append(headerSize).append(" bytes):\n");
+        sb.append("  [1-4]    Magic bytes: \"HUF1\" (4 bytes)\n");
+        sb.append("  [5-12]   Original file length: ").append(originalLen).append(" (8 bytes, long)\n");
+        sb.append("  [13-16]  Count of unique bytes: ").append(nonZeroCount).append(" (4 bytes, int)\n");
+        sb.append("  [17-").append(headerSize).append("] Frequency table: ").append(nonZeroCount).append(" entries × 5 bytes each\n");
+        sb.append("            Each entry: byte value (1 byte) + frequency (4 bytes)\n\n");
+        
+        sb.append("═══════════════════════════════════════════════════\n");
+        sb.append("FREQUENCY TABLE & HUFFMAN CODES\n");
+        sb.append("═══════════════════════════════════════════════════\n\n");
+        
         for (int b = 0; b < 256; b++) {
             if (freq[b] > 0) {
-                sb.append(String.format("byte=%3d  char=%s  freq=%d  code=%s%n",
+                sb.append(String.format("Byte %3d  %-20s  Frequency: %4d  Code: %s%n",
                         b, printable(b), freq[b], (codes == null ? "-" : codes[b])));
             }
         }
+        
+        sb.append("\n═══════════════════════════════════════════════════\n");
+        sb.append("Header Size Breakdown:\n");
+        sb.append("  Magic:           4 bytes\n");
+        sb.append("  Original length: 8 bytes\n");
+        sb.append("  Count:           4 bytes\n");
+        sb.append("  Frequency data:  ").append(nonZeroCount * 5).append(" bytes (").append(nonZeroCount).append(" entries)\n");
+        sb.append("  ─────────────────────────────\n");
+        sb.append("  TOTAL HEADER:    ").append(headerSize).append(" bytes\n");
+        
         return sb.toString();
+    }
+
+    static int calculateHeaderSize(int[] freq) {
+        int nonZeroCount = 0;
+        for (int i = 0; i < 256; i++) {
+            if (freq[i] > 0) nonZeroCount++;
+        }
+        // MAGIC (4) + originalLen (8) + count (4) + (byte + freq) pairs (5 each)
+        return 4 + 8 + 4 + (nonZeroCount * 5);
     }
 
     static List<CodeRow> buildCodeRows(int[] freq, String[] codes) {
